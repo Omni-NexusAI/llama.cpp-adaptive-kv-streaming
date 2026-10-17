@@ -39,6 +39,10 @@ llama_kv_stream_shard_result llama_kv_stream_shard_map_make(
 // Every ordered split of n_head_kv over n_devices (zeros allowed), for candidate search.
 std::vector<std::vector<uint32_t>> llama_kv_stream_shard_candidates(uint32_t n_head_kv, uint32_t n_devices);
 
+// Split `ne_s` elements (one segment, one repeat) over devices in proportion to KV head counts, device d getting
+// ne_s*heads[d]/n_head_kv. Fails (output untouched) when heads do not sum to n_head_kv or ne_s is not a multiple of n_head_kv.
+bool llama_kv_stream_head_split(int64_t ne_s, const std::vector<uint32_t> & heads, uint32_t n_head_kv, int64_t * output);
+
 // Mirror of the stock meta split rounding for one cache_k/cache_v tensor (axis 0, granularity one KV head),
 // used only to show what stock gives and to test the override. `ts` are device fractions; `rotation` is il_eff % n_devices.
 std::vector<uint32_t> llama_kv_stream_stock_kv_heads(

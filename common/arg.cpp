@@ -2914,6 +2914,23 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_TENSOR_SPLIT"));
     add_opt(common_arg(
+        {"--kv-stream-heads"}, "N0,N1,...",
+        "KV heads per device (device order) for full-attention layers under --split-mode tensor with KV streaming; must sum to the model's KV head count [EXPERIMENTAL]",
+        [](common_params & params, const std::string & value) {
+            params.kv_stream_heads.clear();
+            for (const auto & item : string_split<std::string>(value, ',')) {
+                const long long parsed = std::stoll(item);
+                if (parsed < 0 || parsed > 1024) {
+                    throw std::invalid_argument("--kv-stream-heads entries must be between 0 and 1024");
+                }
+                params.kv_stream_heads.push_back((uint32_t) parsed);
+            }
+            if (params.kv_stream_heads.empty()) {
+                throw std::invalid_argument("--kv-stream-heads list is empty");
+            }
+        }
+    ).set_env("LLAMA_ARG_KV_STREAM_HEADS"));
+    add_opt(common_arg(
         {"-mg", "--main-gpu"}, "INDEX",
         string_format("the GPU to use for the model (with split-mode = none), or for intermediate results and KV (with split-mode = row) (default: %d)", params.main_gpu),
         [](common_params & params, int value) {

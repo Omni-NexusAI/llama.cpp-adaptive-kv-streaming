@@ -76,5 +76,31 @@ int main() {
             t.assert_true(llama_kv_stream_shard_map_make(qwen(heads), out).status == llama_kv_stream_shard_status::success);
         }
     });
+    t.test("head_split_follows_heads_for_every_qwen_attention_segment", [](testing & t) {
+        // q+gate (12288), kv (1024), wo input (6144), cache (1024), per-head widths 3072, 256, 1536, 256
+        for (int64_t ne : {12288, 1024, 6144}) {
+            int64_t out[2] = {-1, -1};
+            t.assert_true(llama_kv_stream_head_split(ne, {3, 1}, 4, out));
+            t.assert_equal(int64_t(ne / 4 * 3), out[0]);
+            t.assert_equal(int64_t(ne / 4), out[1]);
+            t.assert_equal(ne, out[0] + out[1]);
+        }
+    });
+    t.test("head_split_is_layer_independent_unlike_stock", [](testing & t) {
+        int64_t a[2], b[2];
+        t.assert_true(llama_kv_stream_head_split(1024, {1, 3}, 4, a));
+        t.assert_true(llama_kv_stream_head_split(1024, {1, 3}, 4, b));
+        t.assert_true(a[0] == b[0] && a[1] == b[1]);
+        t.assert_equal(int64_t(256), a[0]);
+    });
+    t.test("head_split_fails_closed", [](testing & t) {
+        int64_t out[2] = {7, 7};
+        t.assert_true(!llama_kv_stream_head_split(1024, {2, 1}, 4, out));
+        t.assert_true(!llama_kv_stream_head_split(1022, {2, 2}, 4, out));
+        t.assert_true(!llama_kv_stream_head_split(1024, {}, 4, out));
+        t.assert_true(!llama_kv_stream_head_split(1024, {2, 2}, 0, out));
+        t.assert_true(!llama_kv_stream_head_split(1024, {2, 2}, 4, nullptr));
+        t.assert_true(out[0] == 7 && out[1] == 7);
+    });
     return t.summary();
 }

@@ -79,3 +79,13 @@ std::vector<uint32_t> llama_kv_stream_stock_kv_heads(
     heads[(j + rotation) % n] = uint32_t((ne - low) / g);
     return heads;
 }
+
+bool llama_kv_stream_head_split(int64_t ne_s, const std::vector<uint32_t> & heads, uint32_t n_head_kv, int64_t * output) {
+    if (!output || heads.empty() || n_head_kv == 0 || ne_s <= 0 || ne_s % n_head_kv != 0) return false;
+    uint64_t sum = 0;
+    for (auto h : heads) sum += h;
+    if (sum != n_head_kv) return false;
+    const int64_t per_head = ne_s / n_head_kv;
+    for (size_t d = 0; d < heads.size(); ++d) output[d] = per_head * heads[d];
+    return true;
+}

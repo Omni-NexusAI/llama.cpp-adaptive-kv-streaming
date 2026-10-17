@@ -336,6 +336,10 @@ extern "C" {
         // proportion of the model (layers or rows) to offload to each GPU, size: llama_max_devices()
         const float * tensor_split;
 
+        // KV heads per device (device order) for tensor split with KV streaming; NULL keeps the stock split [EXPERIMENTAL]
+        const uint32_t * kv_stream_heads;
+        uint32_t         n_kv_stream_heads;
+
         // Called with a progress value between 0.0 and 1.0. Pass NULL to disable.
         // If the provided progress_callback returns true, model loading continues.
         // If it returns false, model loading is immediately aborted.
