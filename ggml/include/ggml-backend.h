@@ -438,6 +438,14 @@ extern "C" {
     GGML_API ggml_backend_dev_t ggml_backend_meta_device(
         ggml_backend_dev_t * devs, size_t n_devs, ggml_backend_meta_get_split_state_t get_split_state, void * get_split_state_ud);
 
+    // Like ggml_backend_dev_buffer_type(meta_dev) but with caller-chosen per-device buffer types (one per simple device, in order).
+    // Returns NULL when the count or any buffer type's device does not match. The result is cached per (meta_dev, bufts).
+    GGML_API ggml_backend_buffer_type_t ggml_backend_meta_buffer_type_with_bufts(
+        ggml_backend_dev_t meta_dev, ggml_backend_buffer_type_t * simple_bufts, size_t n);
+
+    // Per-device slice of a tensor that lives in a meta buffer, or NULL when there is none.
+    GGML_API struct ggml_tensor * ggml_backend_meta_tensor_shard(const struct ggml_tensor * tensor, size_t index);
+
     //
     // Utils
     //

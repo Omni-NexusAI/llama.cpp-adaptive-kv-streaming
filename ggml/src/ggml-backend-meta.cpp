@@ -255,11 +255,11 @@ struct ggml_backend_meta_buffer_type_context {
 
     ggml_backend_meta_buffer_type_context(std::vector<ggml_backend_buffer_type_t> simple_bufts) : simple_bufts(std::move(simple_bufts)) {
         name = "Meta(";
-        for (size_t i = 0; i < simple_bufts.size(); i++) {
+        for (size_t i = 0; i < this->simple_bufts.size(); i++) {
             if (i > 0) {
                 name += ",";
             }
-            name += ggml_backend_buft_name(simple_bufts[i]);
+            name += ggml_backend_buft_name(this->simple_bufts[i]);
         }
         name += ")";
     }
@@ -380,6 +380,33 @@ static ggml_backend_buffer_type_t ggml_backend_meta_device_get_buffer_type(ggml_
     return &result.first->second.buffer;
 }
 
+ggml_backend_buffer_type_t ggml_backend_meta_buffer_type_with_bufts(
+        ggml_backend_dev_t meta_dev, ggml_backend_buffer_type_t * simple_bufts, size_t n) {
+    static std::map<std::pair<ggml_backend_dev_t, std::vector<ggml_backend_buffer_type_t>>, ggml_backend_meta_buffer_type> derived;
+    if (!ggml_backend_dev_is_meta(meta_dev) || simple_bufts == nullptr || n != ggml_backend_meta_dev_n_devs(meta_dev)) {
+        return nullptr;
+    }
+    std::vector<ggml_backend_buffer_type_t> bufts(simple_bufts, simple_bufts + n);
+    for (size_t i = 0; i < n; i++) {
+        if (bufts[i] == nullptr || ggml_backend_buft_get_device(bufts[i]) != ggml_backend_meta_dev_simple_dev(meta_dev, i)) {
+            return nullptr;
+        }
+    }
+    const auto key = std::make_pair(meta_dev, bufts);
+    auto it = derived.find(key);
+    if (it != derived.end()) {
+        return &it->second.buffer;
+    }
+    auto buft_ctx = std::make_unique<ggml_backend_meta_buffer_type_context>(bufts);
+    struct ggml_backend_buffer_type meta_buft = {
+        /*iface  =*/ ggml_backend_meta_buffer_type_iface,
+        /*device =*/ meta_dev,
+        /*ctx    =*/ buft_ctx.get(),
+    };
+    auto result = derived.emplace(key, ggml_backend_meta_buffer_type{std::move(buft_ctx), meta_buft});
+    return &result.first->second.buffer;
+}
+
 static ggml_backend_buffer_type_t ggml_backend_meta_device_get_host_buffer_type(ggml_backend_dev_t dev) {
     GGML_ASSERT(ggml_backend_dev_is_meta(dev));
     const ggml_backend_meta_device_context * meta_dev_ctx = (const ggml_backend_meta_device_context *) dev->context;
@@ -493,6 +520,17 @@ static struct ggml_tensor * ggml_backend_meta_buffer_simple_tensor(const struct 
         return nullptr;
     }
     return it->second[index];
+}
+
+struct ggml_tensor * ggml_backend_meta_tensor_shard(const struct ggml_tensor * tensor, size_t index) {
+    if (tensor == nullptr || tensor->buffer == nullptr || !ggml_backend_buffer_is_meta(tensor->buffer)) {
+        return nullptr;
+    }
+    ggml_backend_meta_buffer_context * buf_ctx = (ggml_backend_meta_buffer_context *) tensor->buffer->context;
+    if (index >= buf_ctx->bufs.size()) {
+        return nullptr;
+    }
+    return ggml_backend_meta_buffer_simple_tensor(tensor, index);
 }
 
 static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(const struct ggml_tensor * tensor, bool assume_sync);
@@ -2290,8 +2328,8 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
             backend_ctx->ctx.reset(ggml_init(params));
             for (size_t j = 0; j < n_backends; j++) {
                 auto & bcj = backend_ctx->backend_configs[j];
-                for (size_t i = 0; i < n_subgraphs; i++) {
-                    bcj.cgraphs[i].cgraph_main = ggml_new_graph_custom(backend_ctx->ctx.get(), cgraph->n_nodes, /*grads =*/ false);
+                for (size_t i = 0; i < backend_ctx->max_subgraphs; i++) {
+                    bcj.cgraphs[i].cgraph_main = ggml_new_graph_custom(backend_ctx->ctx.get(), backend_ctx->max_nnodes, /*grads =*/ false);
                 }
             }
             backend_ctx->cgraphs_aux.resize(n_backends*n_cgraphs_per_device*backend_ctx->max_subgraphs);
