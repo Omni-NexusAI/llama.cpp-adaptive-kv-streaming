@@ -1,0 +1,7 @@
+set(TARGET dualgpu-probe)
+enable_language(CUDA)
+find_package(CUDAToolkit REQUIRED)
+add_executable(${TARGET} dualgpu-probe.cu)
+set_property(TARGET ${TARGET} PROPERTY CUDA_ARCHITECTURES ${CMAKE_CUDA_ARCHITECTURES})
+target_link_libraries(${TARGET} PRIVATE CUDA::cudart Threads::Threads)
+install(TARGETS ${TARGET} RUNTIME)

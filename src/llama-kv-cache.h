@@ -16,6 +16,7 @@ struct llama_context;
 class llama_kv_stream_model;
 class llama_kv_stream_logical_cache;
 class llama_kv_stream_mtp_proxy;
+class llama_kv_stream_group;
 struct llama_memory_bounded_kv_layout;
 class llama_memory_bounded_kv;
 
@@ -125,6 +126,14 @@ public:
 
     ~llama_kv_cache();
     llama_kv_stream_model * get_kv_stream() const noexcept { return kv_stream.get(); }
+    llama_kv_stream_group * get_kv_stream_group() const noexcept { return kv_group.get(); }
+    bool kv_streamed() const noexcept { return kv_stream || kv_group; }
+    size_t kv_stream_tokens() const noexcept;
+    size_t kv_stream_capacity() const noexcept;
+    bool kv_stream_truncate_to(size_t tokens);
+    bool kv_stream_restore_to(size_t tokens);
+    bool kv_stream_reset_all(bool clear_bytes);
+    std::vector<llama_kv_stream_model *> kv_group_model_ptrs() const;
     // The stock device cache remains available for prefill and unsupported MTP phases.
     // The caller must keep the target context (which owns the physical pool) alive.
     bool attach_mtp_auxiliary_cache(std::shared_ptr<llama_kv_stream_logical_cache> cache,
@@ -299,6 +308,11 @@ private:
     std::unique_ptr<llama_kv_stream_mtp_proxy> mtp_proxy;
     std::shared_ptr<llama_kv_stream_logical_cache> attached_mtp_cache;
     std::unique_ptr<llama_kv_stream_model> kv_stream;
+    // Tensor split with KV streaming: one model per device (owns that device's host KV shard), driven as a group.
+    // Declared before ctxs_bufs so the shard buffers outlive the cache's meta buffer references.
+    std::vector<std::unique_ptr<llama_kv_stream_model>> kv_group_models;
+    std::unique_ptr<llama_kv_stream_group> kv_group;
+    ggml_backend_buffer_t kv_group_meta_buf = nullptr;
     bool v_trans = true;  // the value tensor is transposed
 
     const uint32_t n_seq_max = 1;

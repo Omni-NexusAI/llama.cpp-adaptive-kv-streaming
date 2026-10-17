@@ -20,3 +20,8 @@ ctest `-R "kv-stream|memory|backend|executor|alloc|meta|split|state"`: 58 tests,
 | test-save-load-state | segfault after many PASS rows | upstream synthetic-model test, not yet analysed |
 
 These are the baseline. Any later change must not add to this list.
+
+## After the group wiring (branch `dualgpu/40-wiring`)
+
+Same selection, 61 tests (3 new: shard-map, group, backend-meta-shards): the same 7 do not pass and the same 2 skip. New tests all pass.
+CUDA 12.4.1 SM86 compile-only tree rebuilt with all changes: `llama-server`, `dualgpu-probe`, and the three new tests link. Nothing executed.

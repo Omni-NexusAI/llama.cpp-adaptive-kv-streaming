@@ -480,6 +480,7 @@ struct common_params {
     int32_t n_gpu_layers       = -1;    // number of layers to store in VRAM, -1 is auto, <= -2 is all
     int32_t main_gpu           = 0;     // the GPU that is used for scratch and small tensors
     float   tensor_split[128]  = {0};   // how split tensors should be distributed across GPUs
+    std::vector<size_t> kv_stream_pool_dev_bytes; // per-device KV pools in bytes for tensor split + KV streaming [EXPERIMENTAL]
     std::vector<uint32_t> kv_stream_heads; // KV heads per device for tensor split with KV streaming, empty = stock split [EXPERIMENTAL]
     bool    fit_params         = true;  // whether to fit unset model/context parameters to free device memory
     bool    fit_params_print   = false; // print the estimated required memory to run the model

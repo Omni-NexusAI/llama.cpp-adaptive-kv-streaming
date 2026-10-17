@@ -1833,6 +1833,8 @@ struct llama_context_params common_context_params_to_llama(const common_params &
     cparams.swa_full          = params.swa_full;
     cparams.kv_unified        = params.kv_unified;
 
+    cparams.kv_stream_pool_dev_bytes   = params.kv_stream_pool_dev_bytes.empty() ? nullptr : params.kv_stream_pool_dev_bytes.data();
+    cparams.n_kv_stream_pool_dev       = (uint32_t) params.kv_stream_pool_dev_bytes.size();
     cparams.type_k = params.cache_type_k;
     cparams.type_v = params.cache_type_v;
 

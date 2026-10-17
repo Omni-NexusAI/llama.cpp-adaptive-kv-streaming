@@ -431,6 +431,9 @@ extern "C" {
         struct llama_context * ctx_other;
         // Legacy serial CUDA KV pool; excludes compute, producer and attention workspaces. Zero disables this option.
         size_t kv_stream_pool_bytes;
+        // Per-device KV pools in bytes (device order) for tensor split + KV streaming; NULL/0 = single-device behavior [EXPERIMENTAL]
+        const size_t * kv_stream_pool_dev_bytes;
+        uint32_t       n_kv_stream_pool_dev;
         // Exact device-local parent shared by phase compute and participating memory consumers.
         // Mutually exclusive with kv_stream_pool_bytes; zero disables the shared-budget path.
         size_t shared_device_memory_bytes;

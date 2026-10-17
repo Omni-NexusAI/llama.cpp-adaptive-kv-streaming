@@ -2439,11 +2439,23 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_KV_OFFLOAD"));
     add_opt(common_arg(
-        {"--kv-stream-pool-mib"}, "N",
-        "legacy serial CUDA KV pool in MiB; excludes compute workspaces and is mutually exclusive with --shared-device-memory-mib (requires -fa on, --fit off)",
-        [](common_params & params, int value) {
-            if (value < 0 || size_t(value) > SIZE_MAX/1048576) throw std::invalid_argument("invalid KV stream pool size");
-            params.kv_stream_pool_bytes = size_t(value)*1048576;
+        {"--kv-stream-pool-mib"}, "N[,N...]",
+        "legacy serial CUDA KV pool in MiB; excludes compute workspaces and is mutually exclusive with --shared-device-memory-mib (requires -fa on, --fit off). A comma list gives one pool per device under --split-mode tensor with --kv-stream-heads",
+        [](common_params & params, const std::string & value) {
+            std::vector<size_t> pools;
+            for (const auto & item : string_split<std::string>(value, ',')) {
+                const long long parsed = std::stoll(item);
+                if (parsed < 0 || (unsigned long long) parsed > SIZE_MAX/1048576) throw std::invalid_argument("invalid KV stream pool size");
+                pools.push_back(size_t(parsed)*1048576);
+            }
+            if (pools.empty()) throw std::invalid_argument("KV stream pool list is empty");
+            params.kv_stream_pool_dev_bytes.clear();
+            if (pools.size() == 1) {
+                params.kv_stream_pool_bytes = pools[0];
+            } else {
+                params.kv_stream_pool_dev_bytes = pools;
+                params.kv_stream_pool_bytes = *std::max_element(pools.begin(), pools.end());
+            }
         }
     ));
     add_opt(common_arg(

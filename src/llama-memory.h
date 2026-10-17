@@ -29,6 +29,9 @@ struct llama_memory_params {
     llama_memory_t mem_other;
     llama_kv_stream_logical_cache * mtp_host_cache = nullptr;
     ggml_backend_t kv_stream_backend = nullptr;
+    std::vector<ggml_backend_t> kv_stream_group_backends; // one per meta sub-device, device order; empty = single device
+    std::vector<size_t> kv_stream_group_pool_bytes;
+    std::vector<uint32_t> kv_stream_group_heads;
     size_t kv_stream_pool_bytes = 0;
     size_t shared_device_memory_bytes = 0;
     uint32_t kv_stream_auxiliary_layers = 0;
