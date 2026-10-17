@@ -31,6 +31,7 @@ set(LLAMA_CORE_SOURCES
     llama-kv-stream-publication.cpp
     llama-kv-stream-resident.cpp
     llama-kv-stream-session.cpp
+    llama-kv-stream-shard-map.cpp
     llama-kv-stream-writer.cpp
     llama-memory-budget.cpp
     llama-memory-bounded-kv.cpp
