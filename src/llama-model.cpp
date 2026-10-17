@@ -1,4 +1,5 @@
 #include "llama-model.h"
+#include "llama-kv-stream-shard-map.h"
 
 #include "llama-arch.h"
 #include "llama-ext.h"
@@ -855,10 +856,26 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
         }
         const std::vector<std::pair<int64_t, uint32_t>> segments = get_split_segments(split_state.axis, tc.il);
         const std::vector<int64_t> granularity = get_split_granularity(blck_size, tc.il, segments);
+        // KV streaming head map: full-attention tensors follow the explicit per-device KV head counts, not -ts.
+        const bool kv_head_map = !ud->kv_heads.empty() && ud->model->arch == LLM_ARCH_QWEN35 && !hparams.is_recr(tc.il) &&
+            (std::regex_match(tensor_name, pattern_q_weight) || std::regex_match(tensor_name, pattern_kv_weight) ||
+             std::regex_match(tensor_name, pattern_qkv_weight) || std::regex_match(tensor_name, pattern_q_bias) ||
+             std::regex_match(tensor_name, pattern_kv_bias) || std::regex_match(tensor_name, pattern_qkv_bias) ||
+             std::regex_match(tensor_name, pattern_kv_cache) || std::regex_match(tensor_name, pattern_attn_out_weight) ||
+             std::regex_match(tensor_name, pattern_qk_norm));
+        if (!ud->kv_heads.empty() && ud->model->arch != LLM_ARCH_QWEN35) {
+            GGML_ABORT("kv_stream_heads is only implemented for qwen35");
+        }
         for (size_t is = 0; is < segments.size(); is++) {
             const int64_t  ne_s = segments[is].first;
             const uint32_t nr_s = segments[is].second;
             const int64_t  g_s  = granularity[is];
+            if (kv_head_map) {
+                GGML_ASSERT(ud->kv_heads.size() == ud->n_devices);
+                GGML_ASSERT(llama_kv_stream_head_split(ne_s, ud->kv_heads, hparams.n_head_kv(tc.il), &split_state.ne[is*ud->n_devices]));
+                split_state.nr[is] = nr_s;
+                continue;
+            }
             int64_t low = 0;
             size_t j = 0;
             for (; j < ud->n_devices - 1; j++) {
@@ -2967,6 +2984,8 @@ llama_model_params llama_model_default_params() {
         /*.lazy_mode                   =*/ LLAMA_LAZY_MODE_AUTO,
         /*.main_gpu                    =*/ 0,
         /*.tensor_split                =*/ nullptr,
+        /*.kv_stream_heads             =*/ nullptr,
+        /*.n_kv_stream_heads           =*/ 0,
         /*.progress_callback           =*/ nullptr,
         /*.progress_callback_user_data =*/ nullptr,
         /*.kv_overrides                =*/ nullptr,
