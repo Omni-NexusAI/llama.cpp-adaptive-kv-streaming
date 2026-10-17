@@ -22,7 +22,8 @@ struct mock_device {
 
 struct mock_buffer { mock_device * owner; uint8_t * data; };
 
-static void buf_free(ggml_backend_buffer_t b) { auto * c = (mock_buffer *) b->context; delete[] c->data; delete c; }
+static size_t g_frees = 0;
+static void buf_free(ggml_backend_buffer_t b) { auto * c = (mock_buffer *) b->context; ++g_frees; delete[] c->data; delete c; }
 static void * buf_base(ggml_backend_buffer_t b) { return ((mock_buffer *) b->context)->data; }
 static ggml_status buf_init(ggml_backend_buffer_t, ggml_tensor *) { return GGML_STATUS_SUCCESS; }
 static void buf_set(ggml_backend_buffer_t, ggml_tensor * t, const void * d, size_t off, size_t n) { std::memcpy((uint8_t *) t->data + off, d, n); }
@@ -149,6 +150,42 @@ int main() {
         const uint16_t * row1 = (const uint16_t *) ((const uint8_t *) s1->data + r * s1->nb[1]);
         CHECK(std::memcmp(row0, &src[r * cols], 768 * sizeof(uint16_t)) == 0);
         CHECK(std::memcmp(row1, &src[r * cols + 768], 256 * sizeof(uint16_t)) == 0);
+    }
+    // externally owned shard buffers: planes at explicit pointers, buffers survive the meta buffer
+    {
+        ggml_backend_buffer_ptr ext_a(ggml_backend_buft_alloc_buffer(&a.stream_buft, 1 << 20));
+        ggml_backend_buffer_ptr ext_b(ggml_backend_buft_alloc_buffer(&b.stream_buft, 1 << 20));
+        ggml_backend_buffer_t externals[] = {ext_a.get(), ext_b.get()};
+        ggml_backend_buffer_t wrong[] = {ext_b.get(), ext_a.get()};
+        CHECK(ggml_backend_meta_buffer_from_buffers(derived, wrong, 2, 4) == nullptr);
+        CHECK(ggml_backend_meta_buffer_from_buffers(derived, externals, 1, 4) == nullptr);
+        CHECK(ggml_backend_meta_buffer_from_buffers(stock, externals, 2, 4) == nullptr);
+        const size_t frees_before = g_frees;
+        {
+            ggml_backend_buffer_ptr meta_buf(ggml_backend_meta_buffer_from_buffers(derived, externals, 2, 4));
+            CHECK(meta_buf && ggml_backend_buffer_is_meta(meta_buf.get()));
+            ggml_context_ptr ctx2(ggml_init(params));
+            ggml_tensor * kk = ggml_new_tensor_2d(ctx2.get(), GGML_TYPE_F16, cols, rows);
+            ggml_set_name(kk, "cache_k_l7");
+            void * planes[] = {(uint8_t *) ggml_backend_buffer_get_base(ext_a.get()) + 4096,
+                               (uint8_t *) ggml_backend_buffer_get_base(ext_b.get()) + 8192};
+            void * bad[] = {planes[0], nullptr};
+            CHECK(ggml_backend_meta_tensor_alloc_shards(meta_buf.get(), kk, bad, 2) == GGML_STATUS_FAILED);
+            CHECK(ggml_backend_meta_tensor_alloc_shards(meta_buf.get(), kk, planes, 1) == GGML_STATUS_FAILED);
+            CHECK(ggml_backend_meta_tensor_alloc_shards(meta_buf.get(), kk, planes, 2) == GGML_STATUS_SUCCESS);
+            ggml_tensor * e0 = ggml_backend_meta_tensor_shard(kk, 0);
+            ggml_tensor * e1 = ggml_backend_meta_tensor_shard(kk, 1);
+            CHECK(e0 && e1 && e0->data == planes[0] && e1->data == planes[1]);
+            CHECK(e0->buffer == ext_a.get() && e1->buffer == ext_b.get());
+            CHECK(e0->ne[0] == 768 && e1->ne[0] == 256);
+            ggml_backend_tensor_set(kk, src.data(), 0, src.size() * sizeof(uint16_t));
+            std::vector<uint16_t> back(cols * rows, 0);
+            ggml_backend_tensor_get(kk, back.data(), 0, back.size() * sizeof(uint16_t));
+            CHECK(back == src);
+            CHECK(std::memcmp((uint8_t *) planes[1] + 5 * e1->nb[1], &src[5 * cols + 768], 256 * sizeof(uint16_t)) == 0);
+        }
+        CHECK(g_frees == frees_before);
+        ggml_backend_buffer_clear(ext_a.get(), 1);
     }
     std::printf("test-backend-meta-shards: all checks passed\n");
     return 0;

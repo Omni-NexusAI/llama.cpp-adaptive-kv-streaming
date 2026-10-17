@@ -443,6 +443,15 @@ extern "C" {
     GGML_API ggml_backend_buffer_type_t ggml_backend_meta_buffer_type_with_bufts(
         ggml_backend_dev_t meta_dev, ggml_backend_buffer_type_t * simple_bufts, size_t n);
 
+    // A meta buffer over per-device buffers owned by the caller (never freed with it). Each buffer's type must be the matching
+    // simple buffer type of meta_buft. max_tensors bounds the tensors later bound with ggml_backend_meta_tensor_alloc_shards.
+    GGML_API ggml_backend_buffer_t ggml_backend_meta_buffer_from_buffers(
+        ggml_backend_buffer_type_t meta_buft, ggml_backend_buffer_t * simple_bufs, size_t n, size_t max_tensors);
+
+    // Place a tensor in such a buffer with an explicit data pointer per device (inside that device's buffer).
+    GGML_API enum ggml_status ggml_backend_meta_tensor_alloc_shards(
+        ggml_backend_buffer_t meta_buf, struct ggml_tensor * tensor, void * const * shard_data, size_t n);
+
     // Per-device slice of a tensor that lives in a meta buffer, or NULL when there is none.
     GGML_API struct ggml_tensor * ggml_backend_meta_tensor_shard(const struct ggml_tensor * tensor, size_t index);
 

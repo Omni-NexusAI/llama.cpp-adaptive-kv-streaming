@@ -459,6 +459,7 @@ struct ggml_backend_meta_buffer_context {
     int stc_compute_index      = 0;
     int stc_compute_index_next = 0;
     std::vector<ggml_backend_buffer_ptr> bufs;
+    std::vector<bool> borrowed; // simple buffers owned by someone else; never freed here
 
     // FIXME
     // The size of the split state cache is unbounded and can theoretically grow infinitely large.
@@ -493,6 +494,11 @@ struct ggml_backend_meta_buffer_context {
 static void ggml_backend_meta_buffer_free_buffer(ggml_backend_buffer_t buffer) {
     GGML_ASSERT(ggml_backend_buffer_is_meta(buffer));
     ggml_backend_meta_buffer_context * buf_ctx = (ggml_backend_meta_buffer_context *) buffer->context;
+    for (size_t i = 0; i < buf_ctx->borrowed.size() && i < buf_ctx->bufs.size(); i++) {
+        if (buf_ctx->borrowed[i]) {
+            buf_ctx->bufs[i].release();
+        }
+    }
     delete buf_ctx;
 }
 
@@ -1245,7 +1251,8 @@ static void * ggml_backend_meta_buffer_get_base(ggml_backend_buffer_t buffer) {
     return (void *) 0x1000000000000000; // FIXME
 }
 
-static enum ggml_status ggml_backend_meta_buffer_init_tensor_impl(ggml_backend_meta_simple_tensor_container & stc, ggml_tensor * tensor) {
+static enum ggml_status ggml_backend_meta_buffer_init_tensor_impl(
+        ggml_backend_meta_simple_tensor_container & stc, ggml_tensor * tensor, void * const * shard_data = nullptr) {
     GGML_ASSERT(ggml_backend_buffer_is_meta(tensor->buffer));
     ggml_backend_meta_buffer_context * buf_ctx = (ggml_backend_meta_buffer_context *) tensor->buffer->context;
     const size_t n_simple_bufs = ggml_backend_meta_buffer_n_bufs(tensor->buffer);
@@ -1329,7 +1336,7 @@ static enum ggml_status ggml_backend_meta_buffer_init_tensor_impl(ggml_backend_m
             if (ggml_backend_buffer_is_multi_buffer(simple_buf)) {
                 GGML_ABORT("multi buffers are not supported by the meta backend");
             }
-            t_ij->data = (char *) ggml_backend_buffer_get_base(simple_buf)
+            t_ij->data = shard_data != nullptr ? shard_data[j] : (char *) ggml_backend_buffer_get_base(simple_buf)
                 + size_t(tensor->data) - size_t(ggml_backend_buffer_get_base(tensor->buffer));
         }
         for (int i = 0; i < GGML_MAX_SRC; i++) {
@@ -1836,6 +1843,53 @@ static ggml_backend_buffer_t ggml_backend_meta_buffer_type_alloc_buffer_n(ggml_b
         meta_buf->size = std::max(meta_buf->size, ggml_backend_buffer_get_size(meta_buf_ctx->bufs[i].get()));
     }
     return meta_buf;
+}
+
+ggml_backend_buffer_t ggml_backend_meta_buffer_from_buffers(
+        ggml_backend_buffer_type_t meta_buft, ggml_backend_buffer_t * simple_bufs, size_t n, size_t max_tensors) {
+    if (!ggml_backend_buft_is_meta(meta_buft) || simple_bufs == nullptr || max_tensors == 0 ||
+            n != ggml_backend_meta_buft_n_bufts(meta_buft)) {
+        return nullptr;
+    }
+    size_t max_size = 0;
+    for (size_t i = 0; i < n; i++) {
+        if (simple_bufs[i] == nullptr || ggml_backend_buffer_get_type(simple_bufs[i]) != ggml_backend_meta_buft_simple_buft(meta_buft, i)) {
+            return nullptr;
+        }
+        max_size = std::max(max_size, ggml_backend_buffer_get_size(simple_bufs[i]));
+    }
+    constexpr size_t compute_headroom = 16;
+    const ggml_init_params params_static = { max_tensors * ggml_tensor_overhead(), nullptr, true };
+    const ggml_init_params params_compute = { compute_headroom * max_tensors * ggml_tensor_overhead(), nullptr, true };
+    ggml_backend_meta_simple_tensor_container stc_static   (params_static,  n);
+    ggml_backend_meta_simple_tensor_container stc_compute_0(params_compute, n);
+    ggml_backend_meta_simple_tensor_container stc_compute_1(params_compute, n);
+    std::vector<ggml_backend_buffer_t> bufs(simple_bufs, simple_bufs + n);
+    auto * buf_ctx = new ggml_backend_meta_buffer_context(stc_static, stc_compute_0, stc_compute_1, bufs);
+    buf_ctx->borrowed.assign(n, true);
+    return ggml_backend_buffer_init(meta_buft, ggml_backend_meta_buffer_iface, buf_ctx, max_size);
+}
+
+enum ggml_status ggml_backend_meta_tensor_alloc_shards(
+        ggml_backend_buffer_t meta_buf, struct ggml_tensor * tensor, void * const * shard_data, size_t n) {
+    if (meta_buf == nullptr || tensor == nullptr || shard_data == nullptr || !ggml_backend_buffer_is_meta(meta_buf) ||
+            n != ggml_backend_meta_buffer_n_bufs(meta_buf)) {
+        return GGML_STATUS_FAILED;
+    }
+    for (size_t i = 0; i < n; i++) {
+        if (shard_data[i] == nullptr) {
+            return GGML_STATUS_FAILED;
+        }
+    }
+    ggml_backend_meta_buffer_context * buf_ctx = (ggml_backend_meta_buffer_context *) meta_buf->context;
+    tensor->buffer = meta_buf;
+    tensor->data   = (void *) 0x2000000000000000; // same placeholder as alloc_buffer_n
+    const enum ggml_status status = ggml_backend_meta_buffer_init_tensor_impl(buf_ctx->stc_static, tensor, shard_data);
+    if (status != GGML_STATUS_SUCCESS) {
+        tensor->buffer = nullptr;
+        tensor->data   = nullptr;
+    }
+    return status;
 }
 
 //
