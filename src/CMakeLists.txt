@@ -21,6 +21,7 @@ set(LLAMA_CORE_SOURCES
     llama-kv-stream-capture.cpp
     llama-kv-stream-config.cpp
     llama-kv-stream-content.cpp
+    llama-kv-stream-group.cpp
     llama-kv-stream-host.cpp
     llama-kv-stream-layer-lease.cpp
     llama-kv-stream-logical-cache.cpp
