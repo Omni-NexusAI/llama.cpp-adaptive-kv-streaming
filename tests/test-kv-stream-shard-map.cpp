@@ -1,6 +1,8 @@
 #include "../src/llama-kv-stream-shard-map.h"
 #include "testing.h"
 
+#include <string>
+
 // Qwen3.8-27B family: 24 Q heads, 4 KV heads, head dim 256. Q8_0 and Q4_0 blocks are 32 elements.
 static llama_kv_stream_shard_params qwen(std::vector<uint32_t> heads) {
     llama_kv_stream_shard_params p;
@@ -101,6 +103,40 @@ int main() {
         t.assert_true(!llama_kv_stream_head_split(1024, {2, 2}, 0, out));
         t.assert_true(!llama_kv_stream_head_split(1024, {2, 2}, 4, nullptr));
         t.assert_true(out[0] == 7 && out[1] == 7);
+    });
+    t.test("group_request_validation_names_each_unsupported_feature", [](testing & t) {
+        using g = llama_kv_stream_group_status;
+        auto good = [] {
+            llama_kv_stream_group_request r;
+            r.arch_qwen35 = r.tensor_split = r.flash_attn = r.kv_offload = true;
+            r.n_devices = 2;
+            r.shard = qwen({3, 1});
+            return r;
+        };
+        t.assert_true(llama_kv_stream_group_validate(good()) == g::ok);
+        struct { void (*mutate)(llama_kv_stream_group_request &); g expect; } cases[] = {
+            {[](llama_kv_stream_group_request & r) { r.arch_qwen35 = false; }, g::wrong_arch},
+            {[](llama_kv_stream_group_request & r) { r.tensor_split = false; }, g::not_tensor_split},
+            {[](llama_kv_stream_group_request & r) { r.n_devices = 1; r.shard.kv_heads = {4}; }, g::single_device},
+            {[](llama_kv_stream_group_request & r) { r.flash_attn = false; }, g::no_flash_attn},
+            {[](llama_kv_stream_group_request & r) { r.kv_offload = false; }, g::no_kv_offload},
+            {[](llama_kv_stream_group_request & r) { r.fit = true; }, g::fit_enabled},
+            {[](llama_kv_stream_group_request & r) { r.vision = true; }, g::vision_unsupported},
+            {[](llama_kv_stream_group_request & r) { r.dflash = true; }, g::dflash_unsupported},
+            {[](llama_kv_stream_group_request & r) { r.embeddings = true; }, g::embeddings_unsupported},
+            {[](llama_kv_stream_group_request & r) { r.n_seq_max = 2; }, g::parallel_unsupported},
+            {[](llama_kv_stream_group_request & r) { r.state_on_device = true; }, g::parallel_unsupported},
+            {[](llama_kv_stream_group_request & r) { r.shard.kv_heads = {4}; }, g::head_list_size},
+            {[](llama_kv_stream_group_request & r) { r.shard.head_dim_k = 128; }, g::head_dim_unsupported},
+            {[](llama_kv_stream_group_request & r) { r.page_tokens = 128; }, g::page_geometry},
+            {[](llama_kv_stream_group_request & r) { r.shard.kv_heads = {3, 2}; }, g::shard_map_invalid},
+        };
+        for (auto & c : cases) {
+            auto r = good();
+            c.mutate(r);
+            t.assert_true(llama_kv_stream_group_validate(r) == c.expect);
+            t.assert_true(std::string(llama_kv_stream_group_status_text(c.expect)).size() > 10);
+        }
     });
     return t.summary();
 }
