@@ -273,7 +273,7 @@ llama_context::llama_context(
 
     cparams.n_ubatch = std::min(cparams.n_batch, params.n_ubatch == 0 ? params.n_batch : params.n_ubatch);
     cparams.kv_stream_pool_bytes = params.kv_stream_pool_bytes;
-    if (params.kv_stream_pool_dev_bytes && params.n_kv_stream_pool_dev) {
+    if (params.kv_stream_pool_dev_bytes && params.n_kv_stream_pool_dev && params.ctx_type == LLAMA_CONTEXT_TYPE_DEFAULT) {
         cparams.kv_stream_pool_dev.assign(params.kv_stream_pool_dev_bytes, params.kv_stream_pool_dev_bytes + params.n_kv_stream_pool_dev);
         cparams.kv_stream_pool_bytes = *std::max_element(cparams.kv_stream_pool_dev.begin(), cparams.kv_stream_pool_dev.end());
     }
@@ -297,8 +297,8 @@ llama_context::llama_context(
     }
     if (cparams.kv_stream_group()) {
         if (params.shared_device_memory_bytes || params.ctx_type != LLAMA_CONTEXT_TYPE_DEFAULT || params.ctx_other ||
-                hparams.no_alloc || hparams.vocab_only || cparams.n_rs_seq || cparams.kv_stream_auxiliary_layers || !cparams.causal_attn) {
-            throw std::runtime_error("multi-GPU KV streaming needs a plain serial target context: no shared arena, draft, MTP, rollback, no_alloc or non-causal attention");
+                hparams.no_alloc || hparams.vocab_only || cparams.kv_stream_auxiliary_layers || !cparams.causal_attn) {
+            throw std::runtime_error("multi-GPU KV streaming needs a plain serial target context: no shared arena, attached draft context, auxiliary MTP KV layer, no_alloc or non-causal attention");
         }
         llama_kv_stream_group_request request;
         request.arch_qwen35 = model.arch == LLM_ARCH_QWEN35;

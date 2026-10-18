@@ -1235,13 +1235,14 @@ common_gguf_info common_get_gguf_info(const std::string & fname) {
 }
 
 bool common_params_uses_streamed_mtp(const common_params & params) {
-    return (params.kv_stream_pool_bytes || params.shared_device_memory_bytes) &&
+    // multi-GPU group mode keeps the draft on a plain tensor-split cache and the target on stock recurrent checkpoints
+    return params.kv_stream_pool_dev_bytes.empty() && (params.kv_stream_pool_bytes || params.shared_device_memory_bytes) &&
         std::find(params.speculative.types.begin(), params.speculative.types.end(),
             COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end();
 }
 
 bool common_params_uses_streamed_dflash(const common_params & params) {
-    return (params.kv_stream_pool_bytes || params.shared_device_memory_bytes) &&
+    return params.kv_stream_pool_dev_bytes.empty() && (params.kv_stream_pool_bytes || params.shared_device_memory_bytes) &&
         std::find(params.speculative.types.begin(),params.speculative.types.end(),COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH) != params.speculative.types.end();
 }
 

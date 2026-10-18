@@ -348,6 +348,9 @@ struct common_params_speculative_draft {
     bool cache_type_k_explicit = false;
     bool cache_type_v_explicit = false;
 
+    // MTP draft only: keep KV for the most recent N tokens (0 = whole context). Affects draft acceptance only, never output.
+    int32_t kv_window = 0;
+
     common_cpu_params cpuparams;
     common_cpu_params cpuparams_batch;
 

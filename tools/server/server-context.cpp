@@ -1156,8 +1156,10 @@ private:
             SRV_ERR("%s", "auxiliary KV layers require embedded draft-mtp and a KV stream pool or arena\n");
             return false;
         }
+        // multi-GPU group mode runs speculation on stock recurrent checkpoints and a plain tensor-split draft cache
+        const bool kv_group = !params.kv_stream_pool_dev_bytes.empty();
         if (streaming && (params.fit_params ||
-                (has_spec && !streamed_mtp && !streamed_dflash))) {
+                (has_spec && !kv_group && !streamed_mtp && !streamed_dflash))) {
             SRV_ERR("%s", "KV streaming requires --fit off and an admitted embedded MTP or DFlash2 pairing\n");
             return false;
         }

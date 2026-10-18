@@ -1676,6 +1676,14 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 llama_kv_stream_mtp_release(ctx_tgt);
                 return false;
             }
+            if (params.kv_window > 0) {
+                // evict draft KV older than the window; the target verifies every token, so this only affects acceptance
+                for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
+                    if (i_batch_end[seq_id] < 0) continue;
+                    const llama_pos last = batch_in.tokens[i_batch_end[seq_id]].pos[0];
+                    if (last + 1 > params.kv_window) llama_memory_seq_rm(mem_dft, seq_id, 0, last + 1 - params.kv_window);
+                }
+            }
         }
 
         for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
@@ -2651,6 +2659,12 @@ common_params common_base_params_to_speculative(const common_params & params) {
     }
     // The draft attaches to the target's auxiliary logical cache; it must not
     // construct another streaming pool or reserve a second phase arena.
+    if (!params.kv_stream_pool_dev_bytes.empty()) {
+        // multi-GPU group mode: the draft keeps one plain tensor-split KV layer and inherits the target cache types
+        if (!params_spec.cache_type_k_explicit) result.cache_type_k = params.cache_type_k;
+        if (!params_spec.cache_type_v_explicit) result.cache_type_v = params.cache_type_v;
+    }
+    result.kv_stream_pool_dev_bytes.clear();
     result.kv_stream_auxiliary_layers = 0;
     result.no_kv_stream_rs_rollback = false;
     result.kv_stream_pool_bytes = result.shared_device_memory_bytes = 0;
@@ -2715,6 +2729,12 @@ common_speculative_init_result::common_speculative_init_result(
 
     // the draft context holds as many tokens per sequence as the target context
     cparams.n_ctx = llama_n_ctx(ctx_tgt);
+    if (spec_mtp && params.speculative.draft.kv_window > 0) {
+        // windowed MTP draft: window + one batch of headroom for the rows decoded before old positions are evicted
+        const uint32_t headroom = uint32_t(std::max<int32_t>(params.n_batch, 256)) + 64;
+        const uint32_t windowed = uint32_t(params.speculative.draft.kv_window) + headroom;
+        cparams.n_ctx = std::min<uint32_t>(cparams.n_ctx, windowed);
+    }
 
     // note: for small models maybe we can set this to the maximum possible draft from all speculative types
     //       the extra memory for small models is likely negligible?

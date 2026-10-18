@@ -4182,6 +4182,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
+        {"--spec-draft-kv-window"}, "N",
+        "MTP draft only: keep draft KV for the most recent N tokens, so the draft context and its attention scratch stay small at long context (0 = whole context). Changes draft acceptance, never the generated tokens",
+        [](common_params & params, int value) {
+            if (value < 0) throw std::invalid_argument("--spec-draft-kv-window must be >= 0");
+            params.speculative.draft.kv_window = value;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+    add_opt(common_arg(
         {"--spec-draft-type-k", "-ctkd", "--cache-type-k-draft"}, "TYPE",
         string_format(
             "KV cache data type for K for the draft model\n"

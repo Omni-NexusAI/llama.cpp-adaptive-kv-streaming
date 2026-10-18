@@ -349,6 +349,13 @@ static size_t ggml_backend_meta_buffer_type_get_max_size(ggml_backend_buffer_typ
 static size_t ggml_backend_meta_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buft, const ggml_tensor * tensor) {
     const size_t n_simple_bufts = ggml_backend_meta_buft_n_bufts(buft);
     size_t max_alloc_size = 0;
+    // Attention over execution-sharded KV runs on the shard owners' own workspaces. The stock per-device
+    // estimate would add an F16 copy of the whole K/V for quantized caches (about 4 KiB per context token).
+    if (tensor->op == GGML_OP_FLASH_ATTN_EXT &&
+            ((tensor->src[1] != nullptr && ggml_backend_meta_is_execution_sharded(tensor->src[1])) ||
+             (tensor->src[2] != nullptr && ggml_backend_meta_is_execution_sharded(tensor->src[2])))) {
+        return ggml_nbytes(tensor);
+    }
     for (size_t i = 0; i < n_simple_bufts; i++) {
         const size_t alloc_size = ggml_backend_buft_get_alloc_size(ggml_backend_meta_buft_simple_buft(buft, i), tensor);
         max_alloc_size = std::max(max_alloc_size, alloc_size);
