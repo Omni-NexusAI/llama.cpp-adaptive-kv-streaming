@@ -49,3 +49,20 @@ VRAM use is the same at 128K and 200K; context size now costs pinned host RAM on
 
 ## Rollback
 Nothing here changes the production router, runtimes, launchers, Hermes config or secrets. Delete `launchers\adaptivekv\` and `Z:\AI Runtimes\AdaptiveKV\runtime\adaptivekv-4f075622\` to remove the staged profile. Revert the fork branch to `ce59ff77` to undo the code changes.
+
+## Combined router: one router, different engine builds per preset (commit `a1339328`)
+Router mode now accepts a preset-only `engine = PATH` key (`common/arg.cpp`, `tools/server/server-models.cpp`): the router passes that executable, not its own, to `subprocess::create` for that preset. Without the key nothing changes.
+
+Setup tested on loopback port 8085 (production router not running, nothing on port 8080): the AdaptiveKV build `a1339328` is the router; the nine original presets carry `engine = <PrismML b10735>`; the two stream presets have no engine key and run on the router's own executable.
+
+| Check | Result |
+|---|---|
+| `/v1/models` | lists all 11 presets |
+| Bonsai 2 (PQ2_0, PrismML child) | loads and answers: 28 s cold, 31.7 to 32.0 t/s |
+| Swap stream-128K -> Bonsai -> stream-200K and back | works; router evicts the idle child and waits for it to exit before spawning the next, so no VRAM overlap; min free 572 / 939 MiB |
+| Stream-128K via the packaged final runtime: text, image, 30K needle | all correct; 24.5 t/s with the needle; min free 558 / 1075 MiB |
+| Child arguments for `swift-1.5-qwen38-27b-capacity`, PrismML router vs new router | identical except `--log-colors off` (router-injected; the older engine accepts it) and `--metrics --slots` (inherited from the router command line, as your launcher passes) |
+| Original standard presets (Swift capacity/vision/MTP, UD, APEX, Ornith) | spawned correctly on the PrismML engine but could NOT be load-tested: with the desktop holding 1.9 to 2.9 GiB of the 3070, Swift capacity and Ornith took the 3070 below the 256 MiB guard (135 and 221 MiB free) and the guard stopped them. Those profiles were validated on a lighter desktop with a 512 MiB floor. Not a router fault, but still unverified end to end through the new router |
+| PDL | the stream children ran fine without `GGML_CUDA_PDL=0`; the combined launcher no longer sets it, so PrismML children see the same environment as under the production launcher |
+
+Install and rollback: `launchers\adaptivekv\Install-CombinedRouter.ps1` (run by the user, router stopped) backs up `Start-LlamaRouter.ps1` and `codex-qwen-router-presets.ini` as `*.before-adaptivekv-<stamp>.bak`, installs the combined presets and points the router at the packaged runtime; `-Rollback` restores the newest backups; `Start-LlamaRouter-Original-Prism.bat` always starts the original router and preset list. Not applied yet: the automated permission check blocked editing files under `D:\llama-server\llama router`.
