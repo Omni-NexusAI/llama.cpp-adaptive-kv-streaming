@@ -1515,6 +1515,18 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
         for (int b = 0; b < sched->n_backends && *cur_backend_id == -1; b++) {
             ggml_backend_sched_set_if_supported(sched, node, b, cur_backend_id);
         }
+        if (*cur_backend_id == -1) {
+            // name the node and its sources so unsupported storage contracts are diagnosable
+            fprintf(stderr, "%s: no backend supports node '%s' (op %s, type %s)\n", __func__, node->name, ggml_op_name(node->op), ggml_type_name(node->type));
+            for (int j = 0; j < GGML_MAX_SRC; j++) {
+                const struct ggml_tensor * src = node->src[j];
+                if (src == NULL) {
+                    continue;
+                }
+                fprintf(stderr, "  src[%d] '%s' type %s buffer %s\n", j, src->name, ggml_type_name(src->type),
+                    src->buffer ? ggml_backend_buffer_name(src->buffer) : "(none)");
+            }
+        }
         GGML_ASSERT(*cur_backend_id != -1);
     }
 

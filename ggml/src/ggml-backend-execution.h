@@ -16,6 +16,9 @@ GGML_API ggml_backend_buffer_t ggml_backend_execution_buffer_new(ggml_backend_de
         ggml_backend_buffer_t backing, const ggml_backend_execution_ops & ops, void * context);
 GGML_API bool ggml_backend_buft_is_execution(ggml_backend_buffer_type_t type);
 GGML_API bool ggml_backend_execution_buffers_present();
+// True when the tensor (or its view source) is stored in a meta buffer whose per-device buffers are all execution buffers.
+// Each device's owner then admits its own shard of the attention and KV-write nodes.
+GGML_API bool ggml_backend_execution_sharded(const ggml_tensor * tensor);
 // Multiple unrelated owners are rejected. A null owner means ordinary storage.
 GGML_API bool ggml_backend_execution_owner(const ggml_tensor * op, ggml_backend_buffer_t & owner);
 GGML_API bool ggml_backend_execution_supports(ggml_backend_buffer_t owner, ggml_backend_dev_t device, const ggml_tensor * op);

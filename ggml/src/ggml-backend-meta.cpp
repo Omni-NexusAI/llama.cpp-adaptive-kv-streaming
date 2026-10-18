@@ -2,6 +2,7 @@
 #include "ggml-impl.h"
 #include "ggml-backend.h"
 #include "ggml-backend-impl.h"
+#include "ggml-backend-execution.h"
 #include "ggml-alloc.h"
 #include "ggml-cpp.h"
 
@@ -151,9 +152,42 @@ static ggml_backend_buffer_type_t ggml_backend_meta_device_get_buffer_type(ggml_
 
 static ggml_backend_buffer_type_t ggml_backend_meta_device_get_host_buffer_type(ggml_backend_dev_t dev);
 
+static size_t ggml_backend_meta_buffer_n_bufs(ggml_backend_buffer_t meta_buf);
+static ggml_backend_buffer_t ggml_backend_meta_buffer_simple_buffer(ggml_backend_buffer_t meta_buf, size_t index);
+
+// True when the tensor (or its view source) lives in a meta buffer whose per-device buffers are all execution buffers.
+// Attention and KV writes on such storage are admitted by each device's owner when the shard graph runs, not here.
+static bool ggml_backend_meta_is_execution_sharded(const ggml_tensor * t) {
+    while (t != nullptr && t->view_src != nullptr) {
+        t = t->view_src;
+    }
+    if (t == nullptr || t->buffer == nullptr || !ggml_backend_buffer_is_meta(t->buffer)) {
+        return false;
+    }
+    const size_t n = ggml_backend_meta_buffer_n_bufs(t->buffer);
+    for (size_t i = 0; i < n; i++) {
+        ggml_backend_buffer_t simple = ggml_backend_meta_buffer_simple_buffer(t->buffer, i);
+        if (simple == nullptr || !ggml_backend_buft_is_execution(ggml_backend_buffer_get_type(simple))) {
+            return false;
+        }
+    }
+    return n > 0;
+}
+
+bool ggml_backend_execution_sharded(const ggml_tensor * tensor) {
+    return ggml_backend_meta_is_execution_sharded(tensor);
+}
+
 static bool ggml_backend_meta_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
     GGML_ASSERT(ggml_backend_dev_is_meta(dev));
     const ggml_backend_meta_device_context * meta_dev_ctx = (const ggml_backend_meta_device_context *) dev->context;
+    if (op->op == GGML_OP_FLASH_ATTN_EXT || op->op == GGML_OP_SET_ROWS) {
+        for (int i = 0; i < 3; i++) {
+            if (op->src[i] != nullptr && ggml_backend_meta_is_execution_sharded(op->src[i])) {
+                return true;
+            }
+        }
+    }
     return std::all_of(meta_dev_ctx->simple_devs.begin(), meta_dev_ctx->simple_devs.end(),
         [op](ggml_backend_dev_t simple_dev) { return ggml_backend_dev_supports_op(simple_dev, op); });
 }
