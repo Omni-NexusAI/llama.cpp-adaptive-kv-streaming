@@ -28,3 +28,16 @@ Streaming proof from the server log at 21K tokens: 3070 shard 83 active pages, 5
 Short prompts at 8K: 13.5-14.3 streamed vs 16.2 control.
 
 Files: harness and raw JSON in `Z:\AI Runtimes\AdaptiveKV\logs\eq*.json`.
+
+## 128K context ladder, two head maps (needles at 25/50/75% depth, prompt sizes about 30K / 60K / 90K tokens)
+
+Flags as above with `--ctx-size 131072`. KV pair Q8_0 K / Q4_0 V. Eager. Indicative speeds, small pools, not tuned.
+
+| Head map (3070, 3060) | `-ts` | Pools (3070 / 3060) | Needles | Decode t/s at 30K / 60K / 90K | Prefill t/s at 30K / 60K / 90K | Min free MiB (3060 / 3070) |
+|---|---|---|---|---|---|---|
+| 1, 3 | 26,74 | 640 / 512 MiB | 3 of 3 | 9.9 / 3.2 / 1.8 | 339 / 257 / 196 | 692 / 1093 |
+| 3, 1 | 24,76 | 640 / 256 MiB | 3 of 3 | 13.8 / 8.3 / 4.7 | 372 / 333 / 272 | 880 / 1168 |
+
+At 90K tokens the (1,3) map streams 1.3 GiB per evaluation, almost all of it through the 3060's Gen3 x4 link (2.84 GB/s measured); the (3,1) map puts the large shard on the 25 GB/s link: 2.6x faster decode at 90K. This is the bandwidth-aware head map the plan predicted.
+Side effect seen: with (3,1) the scheduler's compute buffer is 537 MiB on each device (57 MiB with (1,3)); it is allocated at equal size on both cards, which forced the smaller 3060 pool and `-ts 24,76`. Cause not yet found.
+First attempt of (3,1) with `-ts 22,78` and a 512 MiB 3060 pool failed to allocate that compute buffer on the 3060 (900 MiB free). Fixed by rebalancing, not by lowering the floor.

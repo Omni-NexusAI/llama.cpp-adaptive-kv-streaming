@@ -1816,6 +1816,10 @@ static ggml_backend_buffer_t ggml_backend_meta_buffer_type_alloc_buffer(ggml_bac
     bufs.reserve(n_simple_bufts);
     for (size_t i = 0; i < n_simple_bufts; i++) {
         bufs.push_back(ggml_backend_buft_alloc_buffer(ggml_backend_meta_buft_simple_buft(buft, i), size));
+        if (bufs.back() == nullptr) {
+            fprintf(stderr, "ggml_backend_meta_buffer_type_alloc_buffer: device %zu buffer type '%s' failed to allocate %zu bytes (%.1f MiB)\n",
+                i, ggml_backend_buft_name(ggml_backend_meta_buft_simple_buft(buft, i)), size, size/1048576.0);
+        }
         GGML_ASSERT(bufs.back() != nullptr);
         max_size = std::max(max_size, ggml_backend_buffer_get_size(bufs.back()));
     }
