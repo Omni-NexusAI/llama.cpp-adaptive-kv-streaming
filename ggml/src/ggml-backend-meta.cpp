@@ -2,6 +2,7 @@
 #include "ggml-impl.h"
 #include "ggml-backend.h"
 #include "ggml-backend-impl.h"
+#include "ggml-backend-execution.h"
 #include "ggml-alloc.h"
 #include "ggml-cpp.h"
 
@@ -151,9 +152,42 @@ static ggml_backend_buffer_type_t ggml_backend_meta_device_get_buffer_type(ggml_
 
 static ggml_backend_buffer_type_t ggml_backend_meta_device_get_host_buffer_type(ggml_backend_dev_t dev);
 
+static size_t ggml_backend_meta_buffer_n_bufs(ggml_backend_buffer_t meta_buf);
+static ggml_backend_buffer_t ggml_backend_meta_buffer_simple_buffer(ggml_backend_buffer_t meta_buf, size_t index);
+
+// True when the tensor (or its view source) lives in a meta buffer whose per-device buffers are all execution buffers.
+// Attention and KV writes on such storage are admitted by each device's owner when the shard graph runs, not here.
+static bool ggml_backend_meta_is_execution_sharded(const ggml_tensor * t) {
+    while (t != nullptr && t->view_src != nullptr) {
+        t = t->view_src;
+    }
+    if (t == nullptr || t->buffer == nullptr || !ggml_backend_buffer_is_meta(t->buffer)) {
+        return false;
+    }
+    const size_t n = ggml_backend_meta_buffer_n_bufs(t->buffer);
+    for (size_t i = 0; i < n; i++) {
+        ggml_backend_buffer_t simple = ggml_backend_meta_buffer_simple_buffer(t->buffer, i);
+        if (simple == nullptr || !ggml_backend_buft_is_execution(ggml_backend_buffer_get_type(simple))) {
+            return false;
+        }
+    }
+    return n > 0;
+}
+
+bool ggml_backend_execution_sharded(const ggml_tensor * tensor) {
+    return ggml_backend_meta_is_execution_sharded(tensor);
+}
+
 static bool ggml_backend_meta_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
     GGML_ASSERT(ggml_backend_dev_is_meta(dev));
     const ggml_backend_meta_device_context * meta_dev_ctx = (const ggml_backend_meta_device_context *) dev->context;
+    if (op->op == GGML_OP_FLASH_ATTN_EXT || op->op == GGML_OP_SET_ROWS) {
+        for (int i = 0; i < 3; i++) {
+            if (op->src[i] != nullptr && ggml_backend_meta_is_execution_sharded(op->src[i])) {
+                return true;
+            }
+        }
+    }
     return std::all_of(meta_dev_ctx->simple_devs.begin(), meta_dev_ctx->simple_devs.end(),
         [op](ggml_backend_dev_t simple_dev) { return ggml_backend_dev_supports_op(simple_dev, op); });
 }
@@ -315,6 +349,13 @@ static size_t ggml_backend_meta_buffer_type_get_max_size(ggml_backend_buffer_typ
 static size_t ggml_backend_meta_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buft, const ggml_tensor * tensor) {
     const size_t n_simple_bufts = ggml_backend_meta_buft_n_bufts(buft);
     size_t max_alloc_size = 0;
+    // Attention over execution-sharded KV runs on the shard owners' own workspaces. The stock per-device
+    // estimate would add an F16 copy of the whole K/V for quantized caches (about 4 KiB per context token).
+    if (tensor->op == GGML_OP_FLASH_ATTN_EXT &&
+            ((tensor->src[1] != nullptr && ggml_backend_meta_is_execution_sharded(tensor->src[1])) ||
+             (tensor->src[2] != nullptr && ggml_backend_meta_is_execution_sharded(tensor->src[2])))) {
+        return ggml_nbytes(tensor);
+    }
     for (size_t i = 0; i < n_simple_bufts; i++) {
         const size_t alloc_size = ggml_backend_buft_get_alloc_size(ggml_backend_meta_buft_simple_buft(buft, i), tensor);
         max_alloc_size = std::max(max_alloc_size, alloc_size);
@@ -1782,6 +1823,10 @@ static ggml_backend_buffer_t ggml_backend_meta_buffer_type_alloc_buffer(ggml_bac
     bufs.reserve(n_simple_bufts);
     for (size_t i = 0; i < n_simple_bufts; i++) {
         bufs.push_back(ggml_backend_buft_alloc_buffer(ggml_backend_meta_buft_simple_buft(buft, i), size));
+        if (bufs.back() == nullptr) {
+            fprintf(stderr, "ggml_backend_meta_buffer_type_alloc_buffer: device %zu buffer type '%s' failed to allocate %zu bytes (%.1f MiB)\n",
+                i, ggml_backend_buft_name(ggml_backend_meta_buft_simple_buft(buft, i)), size, size/1048576.0);
+        }
         GGML_ASSERT(bufs.back() != nullptr);
         max_size = std::max(max_size, ggml_backend_buffer_get_size(bufs.back()));
     }

@@ -11,6 +11,9 @@
 #include "llama-memory-bounded-kv.h"
 #include "llama-kv-stream-logical-cache.h"
 #include "llama-kv-stream-model.h"
+#include "llama-kv-stream-group.h"
+#include "llama-kv-stream-shard-map.h"
+#include "../ggml/src/ggml-backend-impl.h"
 #include "llama-kv-stream-positions.h"
 #include "llama-mmap.h"
 #include "llama-model.h"
@@ -270,6 +273,10 @@ llama_context::llama_context(
 
     cparams.n_ubatch = std::min(cparams.n_batch, params.n_ubatch == 0 ? params.n_batch : params.n_ubatch);
     cparams.kv_stream_pool_bytes = params.kv_stream_pool_bytes;
+    if (params.kv_stream_pool_dev_bytes && params.n_kv_stream_pool_dev && params.ctx_type == LLAMA_CONTEXT_TYPE_DEFAULT) {
+        cparams.kv_stream_pool_dev.assign(params.kv_stream_pool_dev_bytes, params.kv_stream_pool_dev_bytes + params.n_kv_stream_pool_dev);
+        cparams.kv_stream_pool_bytes = *std::max_element(cparams.kv_stream_pool_dev.begin(), cparams.kv_stream_pool_dev.end());
+    }
     cparams.shared_device_memory_bytes = params.shared_device_memory_bytes;
     cparams.kv_stream_auxiliary_layers = params.kv_stream_auxiliary_layers;
     if (cparams.kv_stream_auxiliary_layers > 1) {
@@ -288,7 +295,38 @@ llama_context::llama_context(
     if (cparams.kv_stream_pool_bytes && cparams.shared_device_memory_bytes) {
         throw std::runtime_error("kv_stream_pool_bytes and shared_device_memory_bytes are mutually exclusive");
     }
-    if (params.kv_stream_pool_bytes || params.shared_device_memory_bytes) {
+    if (cparams.kv_stream_group()) {
+        if (params.shared_device_memory_bytes || params.ctx_type != LLAMA_CONTEXT_TYPE_DEFAULT || params.ctx_other ||
+                hparams.no_alloc || hparams.vocab_only || cparams.kv_stream_auxiliary_layers || !cparams.causal_attn) {
+            throw std::runtime_error("multi-GPU KV streaming needs a plain serial target context: no shared arena, attached draft context, auxiliary MTP KV layer, no_alloc or non-causal attention");
+        }
+        llama_kv_stream_group_request request;
+        request.arch_qwen35 = model.arch == LLM_ARCH_QWEN35;
+        request.tensor_split = model.split_mode() == LLAMA_SPLIT_MODE_TENSOR && model.devices.size() == 1 && model.devices.front().is_meta;
+        request.flash_attn = params.flash_attn_type == LLAMA_FLASH_ATTN_TYPE_ENABLED;
+        request.kv_offload = cparams.offload_kqv;
+        request.embeddings = params.embeddings;
+        request.n_seq_max = cparams.n_seq_max;
+        request.n_devices = uint32_t(model.get_split_state_ud.n_devices);
+        uint32_t first_attn = hparams.n_layer();
+        for (uint32_t il = 0; il < hparams.n_layer(); ++il) if (hparams.has_kv(il)) { first_attn = il; break; }
+        if (first_attn == hparams.n_layer()) throw std::runtime_error("multi-GPU KV streaming found no attention layers");
+        request.shard.n_head = hparams.n_head(first_attn);
+        request.shard.n_head_kv = hparams.n_head_kv(first_attn);
+        request.shard.head_dim_k = hparams.n_embd_head_k(first_attn);
+        request.shard.head_dim_v = hparams.n_embd_head_v(first_attn);
+        request.shard.block_k = (uint32_t) ggml_blck_size(params.type_k);
+        request.shard.block_v = (uint32_t) ggml_blck_size(params.type_v);
+        request.shard.kv_heads = model.get_split_state_ud.kv_heads;
+        const auto group_status = llama_kv_stream_group_validate(request);
+        if (group_status != llama_kv_stream_group_status::ok) {
+            throw std::runtime_error(llama_kv_stream_group_status_text(group_status));
+        }
+        if (cparams.kv_stream_pool_dev.size() != request.n_devices ||
+                std::any_of(cparams.kv_stream_pool_dev.begin(), cparams.kv_stream_pool_dev.end(), [](size_t b) { return b == 0; })) {
+            throw std::runtime_error("--kv-stream-pool-mib must list one nonzero pool per device for multi-GPU KV streaming");
+        }
+    } else if (params.kv_stream_pool_bytes || params.shared_device_memory_bytes) {
         if (model.arch != LLM_ARCH_QWEN35 || params.ctx_type != LLAMA_CONTEXT_TYPE_DEFAULT || params.ctx_other ||
                 hparams.no_alloc || hparams.vocab_only || model.devices.size() != 1 || cparams.n_seq_max != 1 ||
                 (cparams.n_rs_seq && !streamed_rs_rollback) || !cparams.offload_kqv || params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_ENABLED ||
@@ -569,7 +607,23 @@ llama_context::llama_context(
             params_mem.bounded_cache_lease=serial_cache->lease();
         }
         params_mem.mtp_host_cache = mtp_attached.get();
-        if (params.kv_stream_pool_bytes || params.shared_device_memory_bytes) {
+        if (cparams.kv_stream_group()) {
+            for (auto & backend : backends) {
+                if (ggml_backend_is_meta(backend.get())) {
+                    for (size_t i = 0; i < ggml_backend_meta_n_backends(backend.get()); ++i) {
+                        params_mem.kv_stream_group_backends.push_back(ggml_backend_meta_simple_backend(backend.get(), i));
+                    }
+                    break;
+                }
+            }
+            if (params_mem.kv_stream_group_backends.size() != cparams.kv_stream_pool_dev.size()) {
+                throw std::runtime_error("missing meta sub-backends for the KV streaming group");
+            }
+            params_mem.kv_stream_group_pool_bytes = cparams.kv_stream_pool_dev;
+            params_mem.kv_stream_group_heads = model.get_split_state_ud.kv_heads;
+            params_mem.kv_stream_max_rows = cparams.n_ubatch;
+            params_mem.kv_stream_max_decode_rows = rollback_plan.workspace_rows;
+        } else if (params.kv_stream_pool_bytes || params.shared_device_memory_bytes) {
             params_mem.kv_stream_pool_bytes = params.kv_stream_pool_bytes;
             params_mem.shared_device_memory_bytes = params.shared_device_memory_bytes;
             params_mem.kv_stream_auxiliary_layers = cparams.kv_stream_auxiliary_layers;
@@ -588,6 +642,12 @@ llama_context::llama_context(
             auto * stream=hybrid ? hybrid->get_mem_attn()->get_kv_stream() : nullptr;
             cparams.kv_stream_prefill=stream && stream->bounded_prefill();
             cparams.kv_stream_mask=stream && stream->compact_prefill_mask() && hybrid->get_mem_attn()->supports_mask_bounds();
+            if (cparams.kv_stream_group() && hybrid) {
+                const auto shards = hybrid->get_mem_attn()->kv_group_model_ptrs();
+                cparams.kv_stream_prefill = !shards.empty() && std::all_of(shards.begin(), shards.end(), [](auto * m) { return m->bounded_prefill(); });
+                cparams.kv_stream_mask = !shards.empty() && hybrid->get_mem_attn()->supports_mask_bounds() &&
+                    std::all_of(shards.begin(), shards.end(), [](auto * m) { return m->compact_prefill_mask(); });
+            }
         }
         if (mtp_attached) {
             auto * draft_kv = dynamic_cast<llama_kv_cache *>(memory.get());
@@ -618,7 +678,7 @@ llama_context::llama_context(
                 }
             }
 
-            if ((cparams.kv_streaming() || cparams.mtp_publish_host || cparams.serial_block_rows) &&
+            if (!cparams.kv_stream_group() && (cparams.kv_streaming() || cparams.mtp_publish_host || cparams.serial_block_rows) &&
                     ggml_backend_get_device(backend.get()) == model.devices.front().dev) {
                 buft = llama_kv_stream_device_buffer_type(model.devices.front().dev);
                 if (!buft) throw std::runtime_error("missing device-local KV/compute buffer type");
@@ -842,6 +902,10 @@ bool llama_context::prepare_compute_arenas(
     llama_compute_workspace_plan plan;
     if (!llama_compute_workspace_plan_make(backend_buft, measurements, n_phases, plan)) {
         return false;
+    }
+    if (cparams.kv_stream_group()) {
+        // Group mode keeps stock scheduler compute buffers; each shard model owns its private pool and workspaces.
+        return llama_prepare_compute_arena_bindings(sched.get(),backend_ptrs,plan.groups,compute_arenas);
     }
     if (compute_memory && (serial_cache || publication_stage || compute_memory->has_bounded_cache())) {
         return compute_memory->covers_workspace(plan);
@@ -1921,7 +1985,17 @@ llm_graph_result * llama_context::process_ubatch(
         }
     }
     llama_kv_stream_model * stream = nullptr;
-    if (cparams.kv_streaming()) {
+    llama_kv_stream_group * group = nullptr;
+    if (cparams.kv_stream_group()) {
+        group = static_cast<llama_memory_hybrid *>(memory.get())->get_mem_attn()->get_kv_stream_group();
+        if (!group || !mctx || gtype != LLM_GRAPH_TYPE_DEFAULT ||
+                (phase != llama_memory_text_phase::prefill && phase != llama_memory_text_phase::decode) ||
+                !static_cast<llama_memory_hybrid_context *>(mctx)->get_attn()->kv_stream_begin(
+                    ubatch, phase == llama_memory_text_phase::decode)) {
+            LLAMA_LOG_ERROR("%s: KV streaming group rejected non-serial/non-append execution\n",__func__);
+            ret = GGML_STATUS_FAILED; return nullptr;
+        }
+    } else if (cparams.kv_streaming()) {
         static const std::vector<ggml_backend_memory_lease_t> empty;
         stream = static_cast<llama_memory_hybrid *>(memory.get())->get_mem_attn()->get_kv_stream();
         if (!stream || !stream->set_workspaces(compute_memory ? compute_memory->workspace_leases() : empty)) {
@@ -1938,15 +2012,20 @@ llm_graph_result * llama_context::process_ubatch(
     }
     struct stream_guard {
         llama_kv_stream_model * stream;
+        llama_kv_stream_group * group;
         bool completed = false;
-        ~stream_guard() { if (stream && !completed) stream->abort(); }
-    } streaming{stream};
+        ~stream_guard() {
+            if (completed) return;
+            if (stream) stream->abort();
+            if (group) group->abort();
+        }
+    } streaming{stream, group};
     if (mctx && !mctx->apply()) {
         LLAMA_LOG_ERROR("%s: failed to apply memory context\n", __func__);
         ret = GGML_STATUS_FAILED;
         return nullptr;
     }
-    if (stream && cparams.kv_stream_mask && phase == llama_memory_text_phase::prefill &&
+    if ((stream || group) && cparams.kv_stream_mask && phase == llama_memory_text_phase::prefill &&
             !static_cast<llama_memory_hybrid_context *>(mctx)->get_attn()->prepare_mask_bounds(ubatch,cparams.causal_attn)) {
         LLAMA_LOG_ERROR("%s: managed prefill mask cannot be represented by an exact visibility interval\n",__func__);
         ret=GGML_STATUS_FAILED;
@@ -2063,7 +2142,7 @@ llm_graph_result * llama_context::process_ubatch(
         return nullptr;
     }
 
-    if (stream && !stream->complete()) {
+    if ((stream && !stream->complete()) || (group && !group->complete())) {
         LLAMA_LOG_ERROR("%s: KV streaming graph did not complete every attention layer\n",__func__);
         ret = GGML_STATUS_FAILED; return nullptr;
     }
@@ -2371,11 +2450,13 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
     }
 
     if (cparams.kv_streaming()) {
-        auto * stream = static_cast<llama_memory_hybrid *>(memory.get())->get_mem_attn()->get_kv_stream();
-        if (!stream || !stream->complete()) {
+        auto * attn_memory = static_cast<llama_memory_hybrid *>(memory.get())->get_mem_attn();
+        auto * stream = attn_memory->get_kv_stream();
+        auto * group = attn_memory->get_kv_stream_group();
+        if ((!stream && !group) || (stream && !stream->complete()) || (group && (group->active() || group->failed()))) {
             LLAMA_LOG_ERROR("%s: KV streaming requires an idle target append\n",__func__); return -1;
         }
-        const size_t first = stream->tokens();
+        const size_t first = group ? group->tokens() : stream->tokens();
         if (first > cparams.n_ctx_seq || batch_inp.tokens.size() > cparams.n_ctx_seq-first) {
             LLAMA_LOG_ERROR("%s: KV streaming context capacity exceeded\n",__func__); return 1;
         }
@@ -4681,6 +4762,8 @@ llama_context_params llama_context_default_params() {
         /*.n_sampler                   =*/ 0,
         /*.ctx_other                   =*/ nullptr,
         /*.kv_stream_pool_bytes        =*/ 0,
+        /*.kv_stream_pool_dev_bytes    =*/ nullptr,
+        /*.n_kv_stream_pool_dev        =*/ 0,
         /*.shared_device_memory_bytes   =*/ 0,
         /*.kv_stream_auxiliary_layers   =*/ 0,
     };

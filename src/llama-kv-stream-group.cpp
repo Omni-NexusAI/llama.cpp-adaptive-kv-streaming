@@ -1,4 +1,5 @@
 #include "llama-kv-stream-group.h"
+#include "llama-kv-stream-model.h"
 
 #include <exception>
 
@@ -124,4 +125,23 @@ bool llama_kv_stream_group::reconstruct(size_t tokens) {
     frontier = tokens;
     broken = false;
     return true;
+}
+
+namespace {
+struct model_member : llama_kv_stream_member {
+    llama_kv_stream_model * model;
+    explicit model_member(llama_kv_stream_model * m) : model(m) {}
+    bool begin(size_t active_tokens, uint32_t query_tokens, bool decode) override { return model->begin(active_tokens, query_tokens, decode); }
+    bool complete() override { return model->complete(); }
+    void abort() override { model->abort(); }
+    bool truncate(size_t tokens) override { return model->truncate(tokens); }
+    bool restore(size_t tokens) override { return model->restore(tokens); }
+    bool reset(bool clear_bytes) override { return model->reset(clear_bytes); }
+    size_t tokens() const override { return model->tokens(); }
+};
+}
+
+std::unique_ptr<llama_kv_stream_member> llama_kv_stream_member_from_model(llama_kv_stream_model * model) {
+    if (!model) return nullptr;
+    return std::make_unique<model_member>(model);
 }

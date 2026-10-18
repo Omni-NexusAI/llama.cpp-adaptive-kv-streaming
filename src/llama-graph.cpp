@@ -3112,7 +3112,7 @@ ggml_tensor * llm_graph_context::build_attn(
             auto * copy_k = mctx_cur->cpy_k(ctx0, k_cur, k_idxs, il);
             auto * copy_v = mctx_cur->cpy_v(ctx0, v_cur, v_idxs, il);
             ggml_backend_buffer_t managed = nullptr;
-            if (ggml_backend_execution_owner(copy_v, managed) && managed) {
+            if ((ggml_backend_execution_owner(copy_v, managed) && managed) || ggml_backend_execution_sharded(copy_v)) {
                 // Keep K's producer alive until paired publication at the V boundary.
                 copy_v->src[3] = copy_k->src[0];
             }

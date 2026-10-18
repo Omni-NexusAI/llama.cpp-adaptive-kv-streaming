@@ -526,6 +526,11 @@ void server_model_meta::update_args(common_preset_context & ctx_preset, std::str
     // the child output goes through the router to its terminal, so it follows the router colors
     preset.set_option(ctx_preset, "LLAMA_ARG_LOG_COLORS", common_log_get_colors(common_log_main()) ? "on" : "off");
     // TODO: maybe validate preset before rendering ?
+    // a preset may name its own engine executable (preset-only option, not forwarded to the child)
+    std::string engine;
+    if (preset.get_option(COMMON_ARG_PRESET_ENGINE, engine) && !engine.empty()) {
+        bin_path = engine;
+    }
     // render args
     args = preset.to_args(bin_path);
 

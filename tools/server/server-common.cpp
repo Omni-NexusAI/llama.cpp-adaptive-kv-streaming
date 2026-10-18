@@ -36,7 +36,8 @@
 #endif
 
 bool server_uses_vision_arena(const common_params & params) {
-    return !params.mmproj.path.empty() && (params.kv_stream_pool_bytes || params.shared_device_memory_bytes);
+    // multi-GPU group mode uses the stock projector path (projector on CPU, embeddings through the normal decode)
+    return params.kv_stream_pool_dev_bytes.empty() && !params.mmproj.path.empty() && (params.kv_stream_pool_bytes || params.shared_device_memory_bytes);
 }
 const char * server_vision_arena_config_error(const common_params & params) {
     if (!server_uses_vision_arena(params)) return nullptr;

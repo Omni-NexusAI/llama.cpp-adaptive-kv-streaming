@@ -2439,11 +2439,23 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_KV_OFFLOAD"));
     add_opt(common_arg(
-        {"--kv-stream-pool-mib"}, "N",
-        "legacy serial CUDA KV pool in MiB; excludes compute workspaces and is mutually exclusive with --shared-device-memory-mib (requires -fa on, --fit off)",
-        [](common_params & params, int value) {
-            if (value < 0 || size_t(value) > SIZE_MAX/1048576) throw std::invalid_argument("invalid KV stream pool size");
-            params.kv_stream_pool_bytes = size_t(value)*1048576;
+        {"--kv-stream-pool-mib"}, "N[,N...]",
+        "legacy serial CUDA KV pool in MiB; excludes compute workspaces and is mutually exclusive with --shared-device-memory-mib (requires -fa on, --fit off). A comma list gives one pool per device under --split-mode tensor with --kv-stream-heads",
+        [](common_params & params, const std::string & value) {
+            std::vector<size_t> pools;
+            for (const auto & item : string_split<std::string>(value, ',')) {
+                const long long parsed = std::stoll(item);
+                if (parsed < 0 || (unsigned long long) parsed > SIZE_MAX/1048576) throw std::invalid_argument("invalid KV stream pool size");
+                pools.push_back(size_t(parsed)*1048576);
+            }
+            if (pools.empty()) throw std::invalid_argument("KV stream pool list is empty");
+            params.kv_stream_pool_dev_bytes.clear();
+            if (pools.size() == 1) {
+                params.kv_stream_pool_bytes = pools[0];
+            } else {
+                params.kv_stream_pool_dev_bytes = pools;
+                params.kv_stream_pool_bytes = *std::max_element(pools.begin(), pools.end());
+            }
         }
     ));
     add_opt(common_arg(
@@ -4170,6 +4182,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
+        {"--spec-draft-kv-window"}, "N",
+        "MTP draft only: keep draft KV for the most recent N tokens, so the draft context and its attention scratch stay small at long context (0 = whole context). Changes draft acceptance, never the generated tokens",
+        [](common_params & params, int value) {
+            if (value < 0) throw std::invalid_argument("--spec-draft-kv-window must be >= 0");
+            params.speculative.draft.kv_window = value;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+    add_opt(common_arg(
         {"--spec-draft-type-k", "-ctkd", "--cache-type-k-draft"}, "TYPE",
         string_format(
             "KV cache data type for K for the draft model\n"
@@ -4858,6 +4878,12 @@ void common_params_add_preset_options(std::vector<common_arg> & args) {
         "in server router mode, hide a cached model from the model list when this preset resolves to the same model file",
         [](common_params &, const std::string &) { /* unused */ }
     ).set_env(COMMON_ARG_PRESET_DEDUP_CACHE_MODELS).set_preset_only());
+
+    args.push_back(common_arg(
+        {"engine"}, "PATH",
+        "in server router mode, run this model with a different llama-server executable than the router (e.g. a model that needs a specific engine build)",
+        [](common_params &, const std::string &) { /* unused */ }
+    ).set_env(COMMON_ARG_PRESET_ENGINE).set_preset_only());
 
     // args.push_back(common_arg(
     //     {"pin"},

@@ -165,7 +165,7 @@ bool llama_memory_hybrid::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1
 }
 
 void llama_memory_hybrid::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) {
-    if (mem_attn->get_kv_stream()) {
+    if (mem_attn->kv_streamed()) {
         if (seq_id_src != seq_id_dst) LLAMA_LOG_ERROR("%s: KV streaming does not support sequence copies\n",__func__);
         return;
     }
@@ -174,7 +174,7 @@ void llama_memory_hybrid::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_ds
 }
 
 void llama_memory_hybrid::seq_keep(llama_seq_id seq_id) {
-    if (mem_attn->get_kv_stream()) {
+    if (mem_attn->kv_streamed()) {
         if (seq_id != 0) LLAMA_LOG_ERROR("%s: KV streaming only supports sequence zero\n",__func__);
         return;
     }
@@ -183,7 +183,7 @@ void llama_memory_hybrid::seq_keep(llama_seq_id seq_id) {
 }
 
 void llama_memory_hybrid::seq_add(llama_seq_id seq_id, llama_pos p0, llama_pos p1, llama_pos shift) {
-    if (mem_attn->get_kv_stream()) {
+    if (mem_attn->kv_streamed()) {
         if (shift) LLAMA_LOG_ERROR("%s: KV streaming does not support position shifts\n",__func__);
         return;
     }
@@ -192,7 +192,7 @@ void llama_memory_hybrid::seq_add(llama_seq_id seq_id, llama_pos p0, llama_pos p
 }
 
 void llama_memory_hybrid::seq_div(llama_seq_id seq_id, llama_pos p0, llama_pos p1, int d) {
-    if (mem_attn->get_kv_stream()) {
+    if (mem_attn->kv_streamed()) {
         if (d != 1) LLAMA_LOG_ERROR("%s: KV streaming does not support position rescaling\n",__func__);
         return;
     }
@@ -235,7 +235,7 @@ void llama_memory_hybrid::state_read(llama_io_read_i & io, llama_seq_id seq_id, 
         mem_recr->state_read(io, seq_id, flags);
     } catch (...) {
         // the attention part is already restored - undo it
-        if (mem_attn->get_kv_stream()) {
+        if (mem_attn->kv_streamed()) {
             clear(true);
         } else if (read_attn) {
             mem_attn->state_clear(seq_id);

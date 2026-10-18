@@ -19,6 +19,10 @@ public:
     virtual size_t tokens() const = 0;
 };
 
+class llama_kv_stream_model;
+// Wrap one per-device model. The model is borrowed and must outlive the member.
+std::unique_ptr<llama_kv_stream_member> llama_kv_stream_member_from_model(llama_kv_stream_model * model);
+
 // All-or-nothing coordinator over per-device members that share one logical token frontier.
 // Any member failure, exception, or frontier mismatch aborts every member and marks the group failed.
 // A failed group refuses work until reconstruct() restores every member to a chosen frontier.

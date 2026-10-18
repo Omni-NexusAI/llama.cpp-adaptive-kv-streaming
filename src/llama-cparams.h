@@ -17,6 +17,8 @@ struct llama_cparams {
     size_t kv_stream_pool_bytes = 0;
     size_t shared_device_memory_bytes = 0;
     uint32_t kv_stream_auxiliary_layers = 0;
+    std::vector<size_t> kv_stream_pool_dev; // per-device pools for tensor split + KV streaming, empty = single device
+    bool kv_stream_group() const noexcept { return !kv_stream_pool_dev.empty(); }
     bool kv_streaming() const noexcept {
         return kv_stream_pool_bytes || shared_device_memory_bytes;
     }

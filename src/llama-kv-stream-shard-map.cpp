@@ -89,3 +89,45 @@ bool llama_kv_stream_head_split(int64_t ne_s, const std::vector<uint32_t> & head
     for (size_t d = 0; d < heads.size(); ++d) output[d] = per_head * heads[d];
     return true;
 }
+
+llama_kv_stream_group_status llama_kv_stream_group_validate(const llama_kv_stream_group_request & r) {
+    using g = llama_kv_stream_group_status;
+    if (!r.arch_qwen35) return g::wrong_arch;
+    if (!r.tensor_split) return g::not_tensor_split;
+    if (r.n_devices < 2) return g::single_device;
+    if (!r.flash_attn) return g::no_flash_attn;
+    if (!r.kv_offload) return g::no_kv_offload;
+    if (r.fit) return g::fit_enabled;
+    if (r.vision) return g::vision_unsupported;
+    if (r.dflash) return g::dflash_unsupported;
+    if (r.embeddings) return g::embeddings_unsupported;
+    if (r.n_seq_max != 1 || r.state_on_device) return g::parallel_unsupported;
+    if (r.shard.kv_heads.size() != r.n_devices) return g::head_list_size;
+    if (r.shard.head_dim_k != 256 || r.shard.head_dim_v != 256) return g::head_dim_unsupported;
+    if (r.page_tokens != 256) return g::page_geometry;
+    std::vector<llama_kv_stream_shard> map;
+    if (llama_kv_stream_shard_map_make(r.shard, map).status != llama_kv_stream_shard_status::success) return g::shard_map_invalid;
+    return g::ok;
+}
+
+const char * llama_kv_stream_group_status_text(llama_kv_stream_group_status s) {
+    using g = llama_kv_stream_group_status;
+    switch (s) {
+        case g::ok: return "ok";
+        case g::wrong_arch: return "multi-GPU KV streaming supports only the qwen35 architecture";
+        case g::not_tensor_split: return "multi-GPU KV streaming needs --split-mode tensor";
+        case g::single_device: return "--kv-stream-heads needs at least two devices";
+        case g::no_flash_attn: return "multi-GPU KV streaming needs flash attention on";
+        case g::no_kv_offload: return "multi-GPU KV streaming needs KV offload";
+        case g::fit_enabled: return "multi-GPU KV streaming needs --fit off (fit is not implemented for tensor split)";
+        case g::vision_unsupported: return "multi-GPU KV streaming does not support multimodal projectors yet";
+        case g::dflash_unsupported: return "multi-GPU KV streaming does not support DFlash drafters";
+        case g::embeddings_unsupported: return "multi-GPU KV streaming does not support embedding mode";
+        case g::parallel_unsupported: return "multi-GPU KV streaming needs one sequence and no on-device state transfer";
+        case g::head_list_size: return "--kv-stream-heads must list one entry per device";
+        case g::head_dim_unsupported: return "multi-GPU KV streaming supports head size 256 only";
+        case g::page_geometry: return "multi-GPU KV streaming supports 256-token pages only";
+        case g::shard_map_invalid: return "--kv-stream-heads does not give whole GQA groups that sum to the KV head count and align to the quant block";
+    }
+    return "unknown";
+}
