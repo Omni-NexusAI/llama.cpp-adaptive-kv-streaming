@@ -31,10 +31,12 @@ Draft acceptance about 0.65 on repetitive filler text at depth (0.79 to 0.89 at 
 |---|---|---|---|---|
 | 200K | 37.5K / 75K / 112.5K | 19.9 / 16.4 / 12.4 | 315 / 279 / 225 | 560 / 594 |
 | 128K | 30K / 60K / 90K | 26.0 / 25.2 / 15.6 | 355 / 312 / 259 | 558 / 452 |
+**Matched-depth check (same 30K / 60K / 90K prompts, same flags, one run each):** 128K decodes 26.0 / 25.2 / 15.6 t/s, 200K decodes 21.2 / 21.9 / 14.8 t/s (5 to 18 percent slower; prefill 3 to 4 percent slower; draft acceptance equal at 0.65 to 0.67; min free 558 / 584 MiB at 200K). The cause of the small gap is not identified and single runs carry noise, so treat it as a range.
+
 VRAM use is the same at 128K and 200K; context size now costs pinned host RAM only (about 3.3 GiB at 128K, 5.0 at 200K, 6.5 at 256K of KV history). Decode at a given depth does not depend on the context setting, so 200K is the larger usable window at no VRAM cost. The 3060 pool matters: enlarging it from 256 to 384 MiB took decode at 128K/60K from 18.5 to 25.2 t/s. A 3060 pool of 1,280 MiB, and one of 640 MiB with the full profile, failed to allocate at load: nvidia-smi free overstates what cudaMalloc can get by a few hundred MiB near the limit, so keep several hundred MiB above the allocation being made.
 
-## Staged router check (loopback port 8085, not the production port)
-`/v1/models` listed the preset; the model loaded on the first request (about 25 s with cached weights); short text, an image question and a 40K-token needle all answered correctly through `/v1/chat/completions`; 24 to 27 t/s at shallow depth; min free 558 / 651 MiB (3060 / 3070). Production router not touched.
+## Staged router check (loopback port 8085, not the production port; 200K and 128K presets)
+`/v1/models` listed the preset; the model loaded on the first request (about 25 s with cached weights); short text, an image question and a 40K-token needle all answered correctly through `/v1/chat/completions`; 24 to 27 t/s at shallow depth; min free 558 / 651 MiB (3060 / 3070). The 128K preset passed the same checks (text, image, 40K needle; min free 558 / 563 MiB). Production router not touched.
 
 ## Limits and open items
 - The 3070 drives the display: its free memory dipped as low as 282 MiB at 200K when the desktop took 3 to 4 GiB. The guard killed nothing at 256 MiB, but there is little margin. Close heavy GPU apps before loading.
